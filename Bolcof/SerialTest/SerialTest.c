@@ -1,17 +1,11 @@
 #include <gb/gb.h>
 #include <stdio.h>
 
-// ボタンが押されたときに送信する文字列
-const char *buttonA = "Button A pressed\n";
-const char *buttonB = "Button B pressed\n";
-const char *buttonUp = "Button Up pressed\n";
-const char *buttonDown = "Button Down pressed\n";
-const char *buttonLeft = "Button Left pressed\n";
-const char *buttonRight = "Button Right pressed\n";
-const char *buttonStart = "Button Start pressed\n";
-const char *buttonSelect = "Button Select pressed\n";
+#define BUFFER_SIZE 32
 
-void send_serial_byte(unsigned char b) {
+unsigned char buffer[BUFFER_SIZE];
+
+void send_byte(unsigned char b) {
     // シリアル送信開始
     SB_REG = b;
     SC_REG = 0x81; // シリアル転送開始ビットをセット
@@ -20,16 +14,32 @@ void send_serial_byte(unsigned char b) {
     while (SC_REG & 0x80);
 }
 
+unsigned char receive_byte() {
+    // シリアル受信待ち
+    while (!(SC_REG & 0x80));
+    return SB_REG;
+}
+
 void send_string(const char *str) {
     while (*str) {
-        send_serial_byte(*str);
+        send_byte(*str);
         wait_vbl_done();  // シリアル送信が完了するまで待つ
         str++;
     }
 }
 
+void receive_string(unsigned char *buffer, size_t buffer_size) {
+    size_t i = 0;
+    unsigned char received_char;
+    do {
+        received_char = receive_byte();
+        buffer[i++] = received_char;
+        wait_vbl_done(); // シリアル受信の安定のために待機
+    } while (received_char != '\0' && i < buffer_size - 1);
+    buffer[i] = '\0'; // 受信した文字列を終端する
+}
+
 void main() {
-    // 初期化メッセージ
     printf("Ready to send button presses...\n");
 
     while (1) {
@@ -38,28 +48,52 @@ void main() {
 
         // 各ボタンが押された場合に文字列を送信
         if (joypad_state & J_A) {
-            send_string(buttonA);
+            send_string("Button A pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_B) {
-            send_string(buttonB);
+            send_string("Button B pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_UP) {
-            send_string(buttonUp);
+            send_string("Button Up pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_DOWN) {
-            send_string(buttonDown);
+            send_string("Button Down pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_LEFT) {
-            send_string(buttonLeft);
+            send_string("Button Left pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_RIGHT) {
-            send_string(buttonRight);
+            send_string("Button Right pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_START) {
-            send_string(buttonStart);
+            send_string("Button Start pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
         if (joypad_state & J_SELECT) {
-            send_string(buttonSelect);
+            send_string("Button Select pressed\n");
+            // ESPからの応答を受け取る
+            receive_string(buffer, BUFFER_SIZE);
+            printf("ESP: %s\n", buffer);
         }
 
         // 次のフレームまで待つ
