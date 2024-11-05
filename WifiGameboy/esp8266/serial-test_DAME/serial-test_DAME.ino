@@ -18,7 +18,7 @@ SSID送付できない問題は、GB側で読み取りをループさせるこ�
 バッファサイズは512バイトで統一。
 10/26 微調整。Serialを無効化。接続エラー発生時の覚書を記入。
 10/29 gb側からの信号でSSIDループを行う機能を実装。
-11/6 パスワード実装まで仮に。こーれ...SSIDlookupはやはり分解しないとダメだ...!
+10/30 SSID機能を分解。パスワードはパスワードが来るまで待機.キーワードは "SPAS."
 
 */
 
@@ -48,18 +48,23 @@ const byte pinEspRd = 4;
 const uint16_t pinEspRdMask = 1 << pinEspRd;
 const byte pinEspClk = 5;
 const uint16_t pinEspClkMask = 1 << pinEspClk;
-byte pinLED = 16;
+const byte pinLED = 16;
 
-char outbuffer[512];
-volatile int outindex;
+char outbuffer[256];
+volatile byte outindex;
 volatile bool outFilled = false;
-char inbuffer[512];
-volatile int inindex;
+char inbuffer[256];
+volatile byte inindex;
 volatile bool inFilled = false;
 
 
-char serialbuffer[512];
+char serialbuffer[512];//受信データ一時保存バッファ
 int serialIndex = 0;
+char chunkbuffer[2048];//巨大送信データ一時保存バッファ
+char* chunkPos;
+boolean isReadingChunk = false;
+
+boolean isConnEst =false;
 
 //GB通信用変数群　おわり
 
@@ -109,6 +114,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(); 
   isFirsttime=true;
+  password="\0"; 
 
 
   //バッファを末尾文字で初期化 Init buffers to terminal character
@@ -119,7 +125,7 @@ void setup() {
   inindex = 0;
   inFilled = false;
   
-  ///*//Setup pins
+  //Setup pins
   for (int i = 0; i < 16; i++) {
     if ((0x0001 << i) & dataMask) {
       pinMode(i, INPUT_PULLUP);
@@ -131,8 +137,6 @@ void setup() {
   pinMode(pinEspClk, INPUT);
   pinMode(pinLED, OUTPUT);
   //*/
-  //pinLED=14;pinMode(pinLED, OUTPUT);//nodeMCUでのデバッグ用 
-  
   //Interrupts
   //DO NOT TOUCH espRd INTERRUPTS!
   //Especially the logic of enabling the GPIO output in response to the interrupts
@@ -274,6 +278,11 @@ void RSSIfeed(){//RSSI送信
     } 
 }
 
+void parseChunk(){//チャンクを一定数(または１行ごとに)出力に送るメソッド。
+  if(!isReadingChunk){
+    
+  }else{}
+}
 
 void maintainWifi() { //wifi維持機能
   int status = WiFi.status();
@@ -331,7 +340,6 @@ void handleDataFromTcp() {//送信データの整形
   outindex = 0;
   outFilled = true;
 }
-
 void writetoGB(char s[]){//gbに任意の文字列を送信する関数。行儀が悪いので使い所注意
   int i=0;
   while(s[i] != '\0'){
@@ -341,21 +349,6 @@ void writetoGB(char s[]){//gbに任意の文字列を送信する関数。行儀
     outindex = 0;
     outFilled = true;
 }
-
-void writetoGB(String S){//gbに任意の文字列を送信する関数。Stringも受け付けるぞ！行儀が悪いので注意。
-   int Slen =S.length() +1;
-   char s[Slen];
-   S.toCharArray(s,Slen); 
-  
-  int i=0;
-  while(s[i] != '\0'){
-    outbuffer[outindex++]=s[i++];
-  }
-    outbuffer[outindex] = '\0';
-    outindex = 0;
-    outFilled = true;
-}
-
 
 String textExtractor(char s[]){//文字列抽出装置
   int i=0;
@@ -367,9 +360,11 @@ String textExtractor(char s[]){//文字列抽出装置
   return tex;
 }
 
-void connenctionInfoExtractor(char s[]){//パス対抽出装置
+void connenctionInfoExtractor(char s[],int startingIndex){//パス対抽出装置
   bool isPass =false;
-  int i=4;//頭文字"SPAS"を除外。5文字目から開始。
+  int i;
+  serialIndex = startingIndex;//読み取り開始位置を変更する。
+
   while(s[serialIndex]!='\0'){//文字列受信中の処理
     if(s[serialIndex]=='\n'){//改行文字を挟んで二つのデータが来る。その先頭がSSID。ここではSSIDの終端設定処理を行い、パスワード文字列へ入力対象を変更する。
       isPass=true;
@@ -392,13 +387,9 @@ void connenctionInfoExtractor(char s[]){//パス対抽出装置
 
 void SSIDlookup(){
 //初期処理,SSIDの獲得含む。
-//送信文字列作成処理。Stringがお好みのようなので、Stringでくれてやろうと思う！ざけんな
-  String SendSSID = "S";
-  
   int networkCount = WiFi.scanNetworks(); // Wi-Fiネットワークのスキャンを開始
   if (networkCount == 0) {
     //Serial.println("利用可能なネットワークが見つかりませんでした。");
-    SendSSID += "NO NETWORKS FOUND";
   } else {
     //Serial.print(networkCount);
     //Serial.println(" 個のネットワークを検出しました。");
@@ -415,134 +406,84 @@ void SSIDlookup(){
         Serial.printf("ネットワーク %02d : %s %ddB\n", i,mySsids[i].id.c_str(),mySsids[i].rssi);
     }//*/
 
-
-     for(int i=networkCount-1; i>networkCount-11; i--){//末尾が強いので末尾から送る。
-          //int j=0;
-          SendSSID+= mySsids[i].id;
-          SendSSID+= "\n";
-          //while(mySsids[i].id[j]!='\0'){//String終端文字'¥0'まで文字列を呼び出す
-          //  outbuffer[outindex++]=mySsids[i].id[j++]; 
-          //}
-           //outbuffer[outindex++]='\n';//改行文字挿入       
+    //送信文字列作成処理。clientを介さないで送るためこの形式。
+    //長すぎる場合はchunkBufferを使った方式に変更する。 
+     outindex = 0;//念のため出力文字列index初期化   
+     outbuffer[outindex++]== 'S';//先頭に接頭詞添付
+     
+     int k =networkCount-10; //ぬるぽ避け
+     if(k<0)k=0;
+     
+     for(int i=networkCount-1; i>=k; i--){//末尾が強いので末尾から送る。
+          int j=0;
+          if(i<0)break;//ぬるぽ避けその2
+          while(mySsids[i].id[j]!='\0'){//String終端文字'¥0'まで文字列を呼び出す
+            //Serial.print(mySsids[i].id[j]);
+            outbuffer[outindex++]=mySsids[i].id[j++]; 
+          }
+           //Serial.print('\n');
+           outbuffer[outindex++]='\n';//改行文字挿入       
      }
     //送信文字列作成終了処理。この後インタラプトから送信が行われる。
-    int Slen =SendSSID.length() +1;
-    char SSSID[Slen];
-    SendSSID.toCharArray(SSSID,Slen);
-    writetoGB(SSSID);
-    //Serial.println(SendSSID);
-    //Serial.println(SSSID);
-    // outbuffer[outindex] = '\0';
-    //  outindex = 0;
-     // outFilled = true;
+      outbuffer[outindex] = '\0';
+      outindex = 0;
+      outFilled = true;
   }
-  // ユーザーにSSIDとパスワードの入力を促す
-  //Serial.println("接続したいSSIDを入力してください:");
-  bool LTIKA=false;
-   while (!inFilled) {// 今回はGBからの文字列情報の完パケ待機。
-    delay(600);
-    ///*デバッグ用
-    if(!LTIKA){
-      digitalWrite(pinLED, HIGH); LTIKA=true;
-    }else{
-      digitalWrite(pinLED, LOW); LTIKA=false;
-      //Serial.print(".");
-    }//*/
-  }  
+}
+
+void getPassword(){//パスワード対を獲得する。
+  connenctionInfoExtractor(serialbuffer,4);//接続情報獲得
+  //Serial.printf("SSID: %s\n", ssid.c_str()); //デバッグ
+  //Serial.printf("PASSWORD: %s\n", password.c_str());//デバッグ
+}
+
+void connectToWifi(){// Wi-Fiに接続
   
-   handleDataFromGameBoy();//受け取りデータを内部バッファに回収
-
-   if(serialbuffer[0]=='S'){//受取データがパスワード入りのものである場合、接続処理。
-      connenctionInfoExtractor( serialbuffer );//接続情報獲得
-      
-      //Serial.printf("SSID: %s\n", ssid.c_str()); //デバッグ
-      //Serial.printf("PASSWORD: %s\n", password.c_str());//デバッグ
-
-      // Wi-Fiに接続
-      //Serial.println("指定されたネットワークに接続を試みます...");
-      WiFi.begin(ssid.c_str(), password.c_str());
-      byte counter =0;
-      while (WiFi.status() != WL_CONNECTED) {
-        counter++;
-        delay(500);
-        //Serial.print(".");
-        //ここにエラー処理を入れる。タイムアウト10秒以上とかで再接続を要求する。エラー種類がわかればそれを送る。
-        //この場合、wifiリストの取得からやり直しさせる。Wi-Fiに接続以前の部分はメソッドとして用意した方がいいかもしれない。
-        if(counter>20){
-              String S ="CONNECTION FAILED\n";
-              S+= ssid;
-              S+="\n";
-              S+= password;
-              writetoGB(S);
-            return;
-        }
-      }
-      //Serial.println("接続されました!");
-      //Serial.print("IPアドレス: ");
-      //Serial.println(WiFi.localIP());   
-   }else{//デバッグ文字列。"SPAS"で開始しない文字列を受け取った場合に発動。
-      writetoGB(serialbuffer);
-   }
-
+  //Serial.println("指定されたネットワークに接続を試みます...");
+  WiFi.begin(ssid.c_str(), password.c_str());
+  byte counter =0;
+  while (WiFi.status() != WL_CONNECTED) {
+    counter++;
+    if(counter%2==0){
+      digitalWrite(pinLED, HIGH);
+    }else{
+      digitalWrite(pinLED, LOW);
+    }
+    delay(500);
+    //Serial.print(".");
+    //ここにエラー処理を入れる。タイムアウト10秒以上とかで再接続を要求する。エラー種類がわかればそれを送る。
+    //この場合、wifiリストの取得からやり直しさせる? Wi-Fiに接続以前の部分はメソッドとして用意した方がいいかもしれない。
+    if(counter>20){
+        digitalWrite(pinLED, LOW);
+        writetoGB("CONNECTION FAILED");
+        return;
+    }
+  }
+  digitalWrite(pinLED, LOW);
+  writetoGB("CONNECTED!");
+  isConnEst=true;
+  
+  server.begin();
+  client = server.available();  
+  //Serial.println("接続されました!");
+  //Serial.print("IPアドレス: ");
+  //Serial.println(WiFi.localIP());   
 }
-void connectToWiFi(){
-       connenctionInfoExtractor( serialbuffer );//接続情報獲得
 
-        // Wi-Fiに接続
-        String S = "CONNECTED!\nID ADDRSESS=\n";
-        WiFi.begin(ssid.c_str(), password.c_str());
-        byte counter =0;
-        while (WiFi.status() != WL_CONNECTED) {
-          counter++;
-          delay(500);
-          if(counter>20){
-              S ="CONNECTION FAILED\n";
-              S+= ssid;
-              S+="\n";
-              S+= password;
-              writetoGB(S);
-              return;
-          }
-        }
-        S+=WiFi.localIP().toString();        
-        writetoGB(S); 
-}
 
 void loop() {
   if(isFirsttime){
-    //SSIDlookup();
+    //SSIDlookup();//SSID一覧の獲得は、GBからのリクエストを待つ。
     isFirsttime=false;
   }
-  
-  handleDataFromTcp();
-  handleDataFromGameBoy(); 
 
-  //この辺API叩きマン介入
+  if(isConnEst == true) maintainWifi(); //接続維持処理:WiFi.　パスワードが入っている場合に始動。
 
-  //リクエスト受信時のSSID作成
-  if(serialbuffer[0] =='S'){
-    char sigF[4]={serialbuffer[0],serialbuffer[1], serialbuffer[2],serialbuffer[3]};
-    if(sigF[0]=='S'&&sigF[1]=='S'&&sigF[2]=='I'&&sigF[3]=='D'){//SSID
-      serialbuffer[0]='\0';//判定信号破壊処理
-      digitalWrite(pinLED, HIGH);
-      SSIDlookup();
-      digitalWrite(pinLED, LOW);
-    }
-    if(sigF[0]=='S'&&sigF[1]=='P'&&sigF[2]=='A'&&sigF[3]=='S'){//パスワード
-      serialbuffer[0]='\0';//判定信号破壊処理
-      connectToWiFi();
-    }
-  }
-
-  //接続中のSSIDについて、信号強度を取得する。この処理重そうだからできるだけ避けたい。数値とアンテナの本数をどのように扱うかは今後検討。
-  if(WiFi.status() == WL_CONNECTED && millis()%5000==0){//時間変数、使えるのか...？
-      RSSIfeed();
-  }
+  boolean WFCONN =false;//WIFI接続フラグ。Client関係変数が悪さしてそうだったので接続前は迂回する！
+  if(WiFi.status() == WL_CONNECTED) WFCONN=true;
 
 
-
-
-  if(password[0]!='\0')maintainWifi(); //接続維持処理:WiFi
+  if(WFCONN ==true){//client関係の関数はここに隔離し、wifiに繋がっていないと動かないようにする。
   //TELNET用処理
     if (!client) {
     client = server.available();
@@ -550,8 +491,43 @@ void loop() {
     client.stop();
     client = server.available();
   }
-  //*/
+  //*/  
+    handleDataFromTcp();
+    handleDataFromGameBoy(); 
+   
+    //接続中のSSIDについて、信号強度を取得する。この処理重そうだからできるだけ避けたい。数値とアンテナの本数をどのように扱うかは今後検討。
+    if(millis()%5000==0){//時間変数、使えるのか...？
+      RSSIfeed();
+    }  
+  }
+
+  //この辺API叩きマン介入
+
+  //リクエスト受信時の挙動。
+  if(serialbuffer[0] =='S'){//信号頭文字が受信バッファに入ってきた場合の処理。
+    char sigF[4]={serialbuffer[0],serialbuffer[1], serialbuffer[2],serialbuffer[3]};//頭4文字から判別用文字列を作成。
+
+    if(sigF[0]=='S'&&sigF[1]=='S'&&sigF[2]=='I'&&sigF[3]=='D'){//SSID送信
+       digitalWrite(pinLED, HIGH);
+      SSIDlookup();
+       digitalWrite(pinLED, LOW);
+      serialbuffer[0]='\0';//シリアルバッファ信号破壊
+
+    }else if(sigF[0]=='S'&&sigF[1]=='P'&&sigF[2]=='A'&&sigF[3]=='S'){//パスワード受信
+       digitalWrite(pinLED, HIGH);
+      getPassword();
+       digitalWrite(pinLED, LOW);
+      connectToWifi();
+      serialbuffer[0]='\0';//シリアルバッファ信号破壊
+    }
+
+  }
+
+
+
+
+
+
+  
+
 }
-
-
-

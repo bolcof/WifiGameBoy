@@ -1,0 +1,95 @@
+with my code, generated SSID data(char[]) from serial-test(ESP) doesn't reach to test(GB) correctly while static text do. how can I fix this?
+
+If the static text is transmitted correctly but the generated SSID data is not, this typically suggests an issue with how the SSID data is being handled or transmitted. Here are some steps to diagnose and fix the issue:
+
+### Possible Issues and Fixes:
+
+1. **Buffer Initialization and Clearing:**
+   - Ensure that the buffer used to store SSID data is properly initialized and cleared before use.
+   - Ensure there is no residual data from previous transmissions that could interfere with the current transmission.
+
+2. **Data Formatting:**
+   - Confirm that the SSID data is correctly formatted and null-terminated. Any missing null termination (`'\0'`) can cause undefined behavior.
+   - Make sure the data does not exceed the buffer size.
+
+3. **Transmission Timing:**
+   - Check if there is a timing issue when sending dynamic data compared to static data. You might need to adjust delays or synchronization mechanisms.
+
+4. **Character Encoding:**
+   - Verify that the SSID data is encoded correctly. If there are any special characters or non-ASCII characters, they might not be handled properly.
+
+5. **Debugging Information:**
+   - Print the SSID data to the Serial Monitor on the ESP8266 before transmission to ensure it is as expected.
+
+### Suggested Modifications:
+
+#### ESP8266 Code:
+
+1. **Debugging and Verification:**
+   - Print the SSID data to the console before sending it to check for any anomalies.
+
+```cpp
+void sendSSIDData(const char* ssid) {
+    Serial.println("Sending SSID: ");
+    Serial.println(ssid); // Debugging: print SSID
+
+    int index = 0;
+    while (ssid[index] != '\0') {
+        *toESP = ssid[index];
+        delayMicroseconds(10); // Delay to ensure GB reads it
+        *toESP = ssid[index];
+        delayMicroseconds(100); // Additional delay
+        index++;
+    }
+    // Send end-of-transmission marker
+    *toESP = '\0';
+    *toESP = '\0';
+}
+```
+
+2. **Ensure Proper Buffer Handling:**
+   - Make sure to clear any buffer before filling it with new SSID data.
+
+```cpp
+void prepareSSIDData() {
+    memset(outbuffer, 0, sizeof(outbuffer)); // Clear buffer
+    strcpy(outbuffer, generatedSSID); // Assuming generatedSSID is your SSID string
+    // Send using the sendSSIDData function
+    sendSSIDData(outbuffer);
+}
+```
+
+#### Game Boy Code:
+
+1. **Ensure Proper Reception:**
+   - Implement a robust reception function that handles the incoming data correctly.
+
+```c
+void readSSIDData(char* buffer) {
+    int index = 0;
+    char received = '\0';
+    do {
+        received = *fromESP;
+        buffer[index++] = received;
+        delayMicroseconds(10); // Sufficient delay for reading
+    } while (received != '\0' && index < BUFFER_SIZE);
+    buffer[index - 1] = '\0'; // Ensure null-termination
+    // Debugging: Print or display received data for verification
+}
+```
+
+2. **Debugging Reception:**
+   - Display the received data on the Game Boy screen to verify it matches what was sent.
+
+### Additional Considerations:
+
+- **Signal Integrity:**
+  - Ensure that the physical connection between the ESP8266 and Game Boy is secure and noise-free.
+  
+- **Buffer Size:**
+  - Verify that the buffer size on both sender and receiver sides is sufficient to handle the maximum length of SSID data.
+
+- **Error Handling:**
+  - Implement checks to handle cases where the buffer might overflow or if unexpected data is received.
+
+By following these steps and ensuring each part of the communication process is verified and debugged, you should be able to diagnose and fix the issue with SSID data transmission between the ESP8266 and Game Boy.
